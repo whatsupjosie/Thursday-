@@ -1,0 +1,7 @@
+*** main.py
+@@
+ from modules.avatar      import load_avatar, save_avatar, list_presets as list_avatar_presets
++from modules.nervous_system_routes import install_nervous_system_routes
+@@
+ recording: RecordingService = create_recording_service(DATA_DIR / "media", cameras)
++nervous_system = install_nervous_system_routes(app, hub, DATA_DIR, default_room="studio")
