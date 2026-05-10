@@ -1,12 +1,17 @@
 from pathlib import Path
 
+import pytest
+
 from modules.avatar_motion_spine import (
+    AnimationDefinition,
+    AvatarAnimationLibrary,
     AvatarContext,
     AvatarMotionRouter,
     AvatarRuntimeDoctor,
     BoneTransform,
     EmotionTag,
     MotionSource,
+    SPRITES_BANNED,
     build_mocap_intent,
     build_safety_freeze_intent,
 )
@@ -45,6 +50,7 @@ def test_pose_packet_serializes_renderer_contract():
     assert data["avatar_id"] == "manny"
     assert data["skeleton_id"] == "pubcast_authoritative_humanoid_v1"
     assert data["emotion_layer"] == "thinking"
+    assert data["metadata"]["sprites_banned"] is True
     assert isinstance(data["bones"], dict)
 
 
@@ -54,5 +60,24 @@ def test_doctor_allows_seed_repo_without_assets(tmp_path: Path):
     result = AvatarRuntimeDoctor(tmp_path).run()
     assert result.ok
     assert result.checks["repo_root_exists"]
+    assert result.checks["sprites_banned"] is True
+    assert result.checks["no_forbidden_sprite_fallbacks"] is True
     assert result.checks["static_presets_present"]
     assert result.warnings
+
+
+def test_sprite_style_animation_definitions_are_rejected():
+    assert SPRITES_BANNED is True
+    library = AvatarAnimationLibrary()
+    with pytest.raises(ValueError):
+        library.add(AnimationDefinition("sprite_fallback_avatar", 1.0, True, {"root": BoneTransform()}, category="fallback"))
+
+
+def test_doctor_flags_forbidden_sprite_fallback_files(tmp_path: Path):
+    bad_file = tmp_path / "static" / "bad_avatar_fallback.js"
+    bad_file.parent.mkdir()
+    bad_file.write_text("const mode = 'canvas_puppet';", encoding="utf-8")
+    result = AvatarRuntimeDoctor(tmp_path).run()
+    assert not result.ok
+    assert result.checks["no_forbidden_sprite_fallbacks"] is False
+    assert any("bad_avatar_fallback.js" in error for error in result.errors)
