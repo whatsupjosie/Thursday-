@@ -3,6 +3,10 @@
 Dependency-light authority layer for Manny/Sheila GLB motion. It does not
 render; it turns mocap/script/behavior/idle inputs into one safe pose packet.
 Priority: safety > mocap > scripted > behavior > idle.
+
+Project rule: sprites are banned until the project owner explicitly reverses
+that rule. Fallback motion may freeze or idle the GLB skeleton, but it must not
+replace Manny/Sheila with 2D sprite/canvas/image puppets.
 """
 from __future__ import annotations
 
@@ -14,6 +18,8 @@ import time
 
 Vec3 = Tuple[float, float, float]
 Quat = Tuple[float, float, float, float]
+SPRITES_BANNED = True
+FORBIDDEN_SPRITE_TERMS = ("sprite", "spritesheet", "billboard_avatar", "canvas_puppet", "image_avatar")
 
 
 class MotionSource(str, Enum):
@@ -154,6 +160,10 @@ class AvatarAnimationLibrary:
     def add(self, animation: AnimationDefinition) -> None:
         if animation.duration < 0:
             raise ValueError(f"animation duration cannot be negative: {animation.name}")
+        if SPRITES_BANNED:
+            lowered = f"{animation.name} {animation.category}".lower()
+            if any(term in lowered for term in FORBIDDEN_SPRITE_TERMS):
+                raise ValueError(f"sprite-style avatar fallback is banned: {animation.name}")
         self.animations[animation.name] = animation
 
     def get(self, name: str) -> Optional[AnimationDefinition]:
@@ -213,7 +223,7 @@ class AvatarMotionRouter:
             emotion_layer=context.active_emotion,
             glow_intensity_modifier=glow,
             confidence=selected.confidence,
-            metadata={"reason": selected.reason, "priority": selected.priority},
+            metadata={"reason": selected.reason, "priority": selected.priority, "sprites_banned": SPRITES_BANNED},
         )
 
 
@@ -222,14 +232,19 @@ class AvatarRuntimeDoctor:
         self.repo_root = Path(repo_root)
 
     def run(self) -> DoctorResult:
+        forbidden_hits = self._find_forbidden_sprite_hits()
         checks = {
             "repo_root_exists": self.repo_root.exists(),
+            "sprites_banned": SPRITES_BANNED,
+            "no_forbidden_sprite_fallbacks": not forbidden_hits,
             "manny_glb_known_path": any((self.repo_root / p).exists() for p in ("assets/avatars/Manny.glb", "assets/avatar/manny.glb")),
             "sheila_glb_known_path": any((self.repo_root / p).exists() for p in ("assets/avatars/Sheila.glb", "assets/avatar/sheila.glb")),
             "manifest_present": any((self.repo_root / p).exists() for p in ("data/avatars/manifest.json", "assets/avatars/manifest.json")),
             "static_presets_present": (self.repo_root / "static" / "pubcast_animation_presets.js").exists(),
         }
         errors = [] if checks["repo_root_exists"] else [f"repo root does not exist: {self.repo_root}"]
+        if forbidden_hits:
+            errors.extend(f"forbidden sprite fallback reference: {hit}" for hit in forbidden_hits[:20])
         warnings = []
         if not checks["manny_glb_known_path"]:
             warnings.append("Manny GLB not found at known seed/full-app paths.")
@@ -238,6 +253,28 @@ class AvatarRuntimeDoctor:
         if not checks["manifest_present"]:
             warnings.append("Avatar manifest not found; full app should forbid sprite replacement there.")
         return DoctorResult(ok=not errors, checks=checks, warnings=tuple(warnings), errors=tuple(errors))
+
+    def _find_forbidden_sprite_hits(self) -> Tuple[str, ...]:
+        if not self.repo_root.exists() or not SPRITES_BANNED:
+            return ()
+        allowed_files = {
+            "reviewed_input/UPLOADED_ANIMATION_INPUTS.md",
+            "docs/AVATAR_ASSET_POLICY.md",
+        }
+        hits: list[str] = []
+        for path in self.repo_root.rglob("*"):
+            if not path.is_file() or path.suffix.lower() not in {".py", ".js", ".mjs", ".rs", ".md", ".json"}:
+                continue
+            rel = path.relative_to(self.repo_root).as_posix()
+            if rel in allowed_files or ".git" in path.parts or "__pycache__" in path.parts:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="ignore").lower()
+            except OSError:
+                continue
+            if any(term in text for term in FORBIDDEN_SPRITE_TERMS):
+                hits.append(rel)
+        return tuple(hits)
 
 
 def build_safety_freeze_intent(reason: str = "runtime safety fallback") -> MotionIntent:
