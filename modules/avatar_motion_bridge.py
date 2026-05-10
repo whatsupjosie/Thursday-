@@ -1,8 +1,8 @@
 """PubCast avatar motion bridge.
 
-Turns AvatarMotionRouter output into transport-safe events for a browser GLB
+Turns avatar motion authority output into transport-safe events for a browser GLB
 consumer. This is intentionally transport-agnostic: FastAPI/WebSocket, local
-IPC, or a test harness can all call `build_motion_event` and send the result.
+IPC, or a test harness can all build events and send the result.
 """
 from __future__ import annotations
 
@@ -43,10 +43,38 @@ class AvatarMotionEvent:
 
 
 class AvatarMotionBridge:
-    """Small adapter between motion authority and renderer transport."""
+    """Small adapter between motion authority/performance cues and renderer transport."""
 
     def __init__(self, router: Optional[AvatarMotionRouter] = None) -> None:
         self.router = router or AvatarMotionRouter()
+
+    def build_event_from_packet(
+        self,
+        pose_packet: PosePacket,
+        *,
+        now: Optional[float] = None,
+        metadata: Optional[Mapping[str, Any]] = None,
+    ) -> AvatarMotionEvent:
+        """Wrap an already-built PosePacket, such as a performance cue packet."""
+
+        event_time = pose_packet.timestamp if now is None else now
+        return AvatarMotionEvent(
+            protocol=BRIDGE_PROTOCOL,
+            event_type="avatar_pose",
+            avatar_id=pose_packet.avatar_id,
+            timestamp=event_time,
+            pose=pose_packet.to_dict(),
+            transport_metadata=metadata or {},
+        )
+
+    def build_json_from_packet(
+        self,
+        pose_packet: PosePacket,
+        *,
+        now: Optional[float] = None,
+        metadata: Optional[Mapping[str, Any]] = None,
+    ) -> str:
+        return self.build_event_from_packet(pose_packet, now=now, metadata=metadata).to_json()
 
     def build_motion_event(
         self,
@@ -79,6 +107,12 @@ class AvatarMotionBridge:
 
 
 def build_ws_payload(context: AvatarContext, intents: Iterable[MotionIntent], *, now: Optional[float] = None) -> str:
-    """Convenience function for WebSocket routes and smoke tests."""
+    """Convenience function for route-based WebSocket payloads and smoke tests."""
 
     return AvatarMotionBridge().build_motion_json(context, intents, now=now, metadata={"transport": "websocket"})
+
+
+def build_ws_payload_from_packet(pose_packet: PosePacket, *, now: Optional[float] = None) -> str:
+    """Convenience function for direct performance-cue WebSocket payloads."""
+
+    return AvatarMotionBridge().build_json_from_packet(pose_packet, now=now, metadata={"transport": "websocket"})
